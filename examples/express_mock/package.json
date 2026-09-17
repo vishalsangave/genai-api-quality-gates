@@ -2,7 +2,7 @@
   "name": "driftgate-order-export-mock",
   "private": true,
   "version": "1.0.0",
-  "description": "Stateful order & export API vendored from https://gist.github.com/sharanya-lb/b429b6e807f95a8df8216c4343ff6766 (plus /healthz and PORT override), exercised by the DriftGate validation suites.",
+  "description": "Stateful order & export API exercised by the DriftGate validation suites (reference server provenance in docs/ARCHITECTURE.md).",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

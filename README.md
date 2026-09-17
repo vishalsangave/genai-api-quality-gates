@@ -92,6 +92,7 @@ Every pull request runs the full suite automatically (zero API keys, no external
 ## More documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — maintainer-facing deep dive: the three-layer design, statistical release governor, configuration reference, and roadmap.
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — contributing guide: repo layout, ground rules, how to add tests and relations, quality gates.
 
 ## Troubleshooting
 

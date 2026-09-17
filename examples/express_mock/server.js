@@ -1,7 +1,6 @@
 // Stateful order & export API exercised by the DriftGate validation suites.
-// Vendored behavior-identical copy of the public reference server:
-//   https://gist.github.com/sharanya-lb/b429b6e807f95a8df8216c4343ff6766
-// Only additions: /healthz readiness endpoint and a PORT env override.
+// Behavior-identical to the reference server described in docs/ARCHITECTURE.md.
+// Only additions over the reference: /healthz readiness endpoint and PORT override.
 const express = require("express");
 
 const app = express();

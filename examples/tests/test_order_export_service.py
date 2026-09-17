@@ -1,10 +1,9 @@
 """Validation suite for the stateful order & export API.
 
 The service under test is the vendored Express mock at
-``examples/express_mock/server.js`` — a behavior-identical copy of the public
-reference server at
-https://gist.github.com/sharanya-lb/b429b6e807f95a8df8216c4343ff6766
-(only a /healthz readiness endpoint and a PORT env override were added).
+``examples/express_mock/server.js`` — behavior-identical to the reference
+server whose provenance is recorded in ``docs/ARCHITECTURE.md`` (only a
+/healthz readiness endpoint and a PORT env override were added).
 It is started automatically by the session fixture; tests are named purely
 for the stateful API they validate.
 
