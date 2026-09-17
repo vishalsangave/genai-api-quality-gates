@@ -1,0 +1,88 @@
+openapi: 3.1.0
+info:
+  title: DriftGate Demo GenAI Service
+  version: 1.0.0
+paths:
+  /v1/chat/completions:
+    post:
+      parameters:
+        - in: header
+          name: X-Demo-Behavior
+          required: false
+          schema:
+            type: string
+            enum: [normal, slow, invalid_schema, truncated, error_stream]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role: { type: string }
+                      content: { type: string }
+                    additionalProperties: false
+                temperature: { type: number, minimum: 0, maximum: 2 }
+              additionalProperties: false
+      responses:
+        '200':
+          description: Server-sent event stream of chat deltas
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                required: [delta]
+                properties:
+                  delta: { type: string }
+                additionalProperties: false
+        '422':
+          description: Request failed model-side validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+  /v1/summarize:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1 }
+                max_words: { type: integer, minimum: 1 }
+              additionalProperties: false
+      responses:
+        '200':
+          description: Deterministic summary of the supplied text
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [summary, char_count]
+                properties:
+                  summary: { type: string }
+                  char_count: { type: integer }
+                additionalProperties: false
+        '422':
+          description: Request failed model-side validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+components:
+  schemas:
+    ValidationError:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+      additionalProperties: false

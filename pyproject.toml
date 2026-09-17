@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "driftgate"
+version = "0.1.0"
+description = "API quality gates for non-deterministic GenAI microservices: deterministic contracts, AST-aware cassette replay, streaming SLAs, and a statistical PROMOTE/HOLD/ROLLBACK release governor."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Vishal Sangave" }]
+keywords = ["testing", "api", "genai", "llm", "contract-testing", "ci-cd", "quality-gate"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Framework :: Pytest",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+    "numpy>=1.26",
+    "jsonschema>=4.21",
+    "referencing>=0.34",
+    "typer>=0.12",
+    "click>=8.1",
+    "typing-extensions>=4.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-timeout>=2.3",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "sse-starlette>=2.1",
+]
+
+[project.scripts]
+driftgate = "driftgate.cli:main"
+
+[project.entry-points.pytest11]
+driftgate = "driftgate.pytest_plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["driftgate"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+markers = [
+    "nightly: Layer 3 metamorphic + statistical governor evaluation, cron/label-triggered only",
+    "slow: long wall-clock tests (order/export state-machine polling)",
+]
+timeout = 180

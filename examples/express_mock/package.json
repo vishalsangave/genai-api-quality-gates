@@ -1,0 +1,13 @@
+{
+  "name": "driftgate-order-export-mock",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Stateful order and export API exercised by DriftGate validation tests.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}

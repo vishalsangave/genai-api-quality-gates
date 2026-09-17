@@ -1,0 +1,82 @@
+# Copy this file into your service repository, for example:
+#   cp examples/driftgate.service.template.yaml driftgate.config.yaml
+#
+# Then set the target URL and OpenAPI contract path for your API.
+version: "1.0"
+
+service:
+  # The service must already be running. DriftGate deliberately does not own
+  # service lifecycle; CI/local scripts start the target and wait for readiness.
+  base_url: "http://localhost:8000"
+  endpoint: "/v1/chat/completions"
+  method: "POST"
+
+# record | replay_strict | replay_lenient | live | auto_record
+# auto_record: replay a matching cassette; call the live service and save a
+# cassette only on a miss. Use it while building coverage, then switch CI to
+# replay_strict for zero-network, zero-token-cost verification.
+traffic_mode: auto_record
+cassette_dir: tests/cassettes
+
+contract:
+  # Use a project-relative path to an OpenAPI 3.1 YAML or JSON document.
+  openapi_spec: docs/openapi.yaml
+  strict_types: true
+  enforce: true
+
+streaming_sla:
+  enabled: true
+  max_ttft_ms: 800
+  max_itl_ms: 35
+  require_done_marker: true
+  done_marker: "[DONE]"
+
+# All built-in MVP mutators are local/deterministic: no paid inference calls.
+metamorphic_assertions:
+  - relation: paraphrase_invariance
+    similarity_threshold: 0.90
+    max_permutations: 1
+    mutator: local
+  - relation: adversarial_noise_invariance
+    max_permutations: 1
+    mutator: local
+
+# The deterministic judge is the default and is what keeps PR checks free.
+# Configure a real judge only in a scheduled/nightly environment.
+judge:
+  provider: deterministic
+  api_key_env: DRIFT_GATE_JUDGE_API_KEY
+
+quality_gate:
+  confidence_level: 0.95
+  max_allowable_drift: 0.05
+  on_indeterminate: HOLD
+
+governor:
+  safety_pass_rate_min: 1.0
+  task_success_min: 0.80
+  p95_latency_ms_max: 15000
+  rng_seed: 20260917
+
+# Commands:
+#
+# Existing OpenAPI contract
+#   uv run driftgate run --config driftgate.config.yaml
+#
+# Record cassettes while exercising tests against a running service
+#   uv run driftgate record --config driftgate.config.yaml
+#
+# Strict, zero-network replay in CI
+#   uv run pytest --driftgate-config driftgate.config.yaml \
+#     --cassette-mode=replay_strict
+#
+# No OpenAPI contract yet: infer an advisory starter contract from recordings
+#   uv run driftgate infer-schema --from-cassettes tests/cassettes \
+#     --out docs/inferred.openapi.yaml
+#
+# After review, write a strict contract (removes x-driftgate-inferred markers)
+#   uv run driftgate infer-schema --from-cassettes tests/cassettes \
+#     --out docs/openapi.yaml --promote
+#
+# Evaluate a metrics artifact directly: PROMOTE=0, ROLLBACK=1, HOLD=2
+#   uv run driftgate gate --metrics .driftgate/metrics.json

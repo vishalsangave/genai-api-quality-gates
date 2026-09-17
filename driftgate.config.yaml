@@ -1,0 +1,43 @@
+version: "1.0"
+service:
+  base_url: "http://localhost:8000"
+
+# auto_record replays matching cassettes and records a live response only on a miss.
+traffic_mode: auto_record
+cassette_dir: cassettes
+
+contract:
+  openapi_spec: null
+  strict_types: true
+  enforce: true
+
+streaming_sla:
+  enabled: true
+  max_ttft_ms: 800
+  max_itl_ms: 35
+  require_done_marker: true
+  done_marker: "[DONE]"
+
+metamorphic_assertions:
+  - relation: paraphrase_invariance
+    similarity_threshold: 0.90
+    max_permutations: 1
+    mutator: local
+  - relation: adversarial_noise_invariance
+    max_permutations: 1
+    mutator: local
+
+quality_gate:
+  confidence_level: 0.95
+  max_allowable_drift: 0.05
+  on_indeterminate: HOLD
+
+judge:
+  provider: deterministic
+  api_key_env: DRIFT_GATE_JUDGE_API_KEY
+
+governor:
+  safety_pass_rate_min: 1.0
+  task_success_min: 0.80
+  p95_latency_ms_max: 15000
+  rng_seed: 20260917

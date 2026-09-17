@@ -1,0 +1,239 @@
+openapi: 3.1.0
+info:
+  title: Stateful Order and Export API
+  version: 1.0.0
+paths:
+  /v1/auth/login:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, apiKey]
+              properties:
+                username: { type: string, minLength: 1 }
+                apiKey: { type: string, minLength: 1 }
+              additionalProperties: false
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expiresIn]
+                properties:
+                  token: { type: string }
+                  expiresIn: { type: integer, const: 3600 }
+                additionalProperties: false
+        '400':
+          description: Missing credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/orders:
+    post:
+      parameters:
+        - in: header
+          name: X-Correlation-ID
+          required: true
+          schema: { type: string, minLength: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customerId, items, shippingAddress]
+              properties:
+                customerId: { type: string, minLength: 1 }
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [quantity, unitPrice]
+                    properties:
+                      quantity: { type: number }
+                      unitPrice: { type: number }
+                    additionalProperties: true
+                shippingAddress: { type: string, minLength: 1 }
+              additionalProperties: false
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderId, status, totalAmount, createdAt]
+                properties:
+                  orderId: { type: string, pattern: '^ORD-\d{5}$' }
+                  status: { type: string, const: PENDING }
+                  totalAmount: { type: number }
+                  createdAt: { type: string, format: date-time }
+                additionalProperties: false
+        '400':
+          description: Bad order request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/orders/{orderId}:
+    parameters:
+      - in: path
+        name: orderId
+        required: true
+        schema: { type: string }
+    get:
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderId, customerId, items, shippingAddress, totalAmount, status, createdAt, createdTimestamp]
+                properties:
+                  orderId: { type: string, pattern: '^ORD-\d{5}$' }
+                  customerId: { type: string }
+                  items: { type: array }
+                  shippingAddress: { type: string }
+                  totalAmount: { type: number }
+                  status: { type: string, enum: [PENDING, PROCESSING, COMPLETED, CANCELLED] }
+                  createdAt: { type: string, format: date-time }
+                  createdTimestamp: { type: number }
+                additionalProperties: false
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Missing order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderId, status]
+                properties:
+                  orderId: { type: string }
+                  status: { type: string, const: CANCELLED }
+                additionalProperties: false
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Missing order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Completed orders cannot be cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/exports:
+    post:
+      responses:
+        '202':
+          description: Export queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, status, pollIntervalSeconds]
+                properties:
+                  jobId: { type: string, pattern: '^JOB-\d{5}$' }
+                  status: { type: string, const: PROCESSING }
+                  pollIntervalSeconds: { type: integer, const: 5 }
+                additionalProperties: false
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/exports/{jobId}:
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string }
+    get:
+      responses:
+        '200':
+          description: Export status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, status, downloadUrl]
+                properties:
+                  jobId: { type: string, pattern: '^JOB-\d{5}$' }
+                  status: { type: string, enum: [PROCESSING, COMPLETED] }
+                  downloadUrl:
+                    anyOf:
+                      - { type: string }
+                      - { type: 'null' }
+                additionalProperties: false
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Missing export
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/exports/{jobId}/download:
+    parameters:
+      - in: path
+        name: jobId
+        required: true
+        schema: { type: string }
+    get:
+      responses:
+        '200':
+          description: CSV report
+          content:
+            text/csv:
+              schema: { type: string }
+        '400':
+          description: Export incomplete
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Missing export
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+      additionalProperties: false
