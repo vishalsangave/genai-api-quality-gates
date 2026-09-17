@@ -61,6 +61,7 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests", "examples/tests"]
 markers = [
     "nightly: Layer 3 metamorphic + statistical governor evaluation, cron/label-triggered only",
     "slow: long wall-clock tests (order/export state-machine polling)",

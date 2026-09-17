@@ -1,30 +1,47 @@
-# Copy this file into your service repository, for example:
-#   cp examples/driftgate.service.template.yaml driftgate.config.yaml
+# DriftGate service manifest — configured for the reference order & export API.
 #
-# Then set the target URL and OpenAPI contract path for your API.
+# This template is the PDF-assignment-shaped manifest: it targets the stateful
+# order & export mock from
+#   https://gist.github.com/sharanya-lb/b429b6e807f95a8df8216c4343ff6766
+# running locally (npm install express && node server.js → localhost:3000/v1)
+# and points the contract gate at that API's OpenAPI 3.1 spec vendored at
+#   examples/express_mock/openapi.yaml
+#
+# It is exercised by the config-driven suite:
+#   uv run pytest tests/test_config_driven_order_export.py \
+#     --driftgate-config examples/driftgate.service.template.yaml -v
+#
+# DriftGateConfig.load() must accept every key below; if a documented key
+# ever drifts from driftgate/config.py, that suite fails immediately — the
+# template cannot rot silently.
 version: "1.0"
 
 service:
   # The service must already be running. DriftGate deliberately does not own
   # service lifecycle; CI/local scripts start the target and wait for readiness.
-  base_url: "http://localhost:8000"
-  endpoint: "/v1/chat/completions"
+  base_url: "http://localhost:3000/v1"
+  endpoint: "/orders"
   method: "POST"
 
 # record | replay_strict | replay_lenient | live | auto_record
 # auto_record: replay a matching cassette; call the live service and save a
-# cassette only on a miss. Use it while building coverage, then switch CI to
-# replay_strict for zero-network, zero-token-cost verification.
+# cassette only on a miss. Stateful routes (order lifecycle, export jobs) are
+# time-driven server state and always run live; cassettes cover stateless
+# shapes only (login, validation errors).
 traffic_mode: auto_record
-cassette_dir: tests/cassettes
+cassette_dir: cassettes
 
 contract:
-  # Use a project-relative path to an OpenAPI 3.1 YAML or JSON document.
-  openapi_spec: docs/openapi.yaml
+  # The hand-written OpenAPI 3.1 document describing the reference API: every
+  # validated response (login 200, orders 202/400/401, exports 202) is checked
+  # against the schemas declared here.
+  openapi_spec: examples/express_mock/openapi.yaml
   strict_types: true
   enforce: true
 
 streaming_sla:
+  # Inert for this JSON-only API. These defaults apply to GenAI-style SSE
+  # endpoints — see examples/demo_service for a service that exercises them.
   enabled: true
   max_ttft_ms: 800
   max_itl_ms: 35
@@ -58,24 +75,26 @@ governor:
   p95_latency_ms_max: 15000
   rng_seed: 20260917
 
-# Commands:
+# Commands (see README "Running the original gist server yourself" for the
+# two-terminal setup):
 #
-# Existing OpenAPI contract
-#   uv run driftgate run --config driftgate.config.yaml
+# Existing OpenAPI contract — run pytest, then govern the metrics artifact
+#   uv run driftgate run --config examples/driftgate.service.template.yaml
 #
-# Record cassettes while exercising tests against a running service
-#   uv run driftgate record --config driftgate.config.yaml
+# Record cassettes while exercising tests against the running server
+#   uv run driftgate record --config examples/driftgate.service.template.yaml
 #
-# Strict, zero-network replay in CI
-#   uv run pytest --driftgate-config driftgate.config.yaml \
-#     --cassette-mode=replay_strict
+# Config-driven suite against YOUR running gist server
+#   DRIFT_GATE_EXPRESS_URL=http://localhost:3000/v1 \
+#     uv run pytest tests/test_config_driven_order_export.py \
+#     --driftgate-config examples/driftgate.service.template.yaml -v
 #
 # No OpenAPI contract yet: infer an advisory starter contract from recordings
-#   uv run driftgate infer-schema --from-cassettes tests/cassettes \
+#   uv run driftgate infer-schema --from-cassettes cassettes \
 #     --out docs/inferred.openapi.yaml
 #
 # After review, write a strict contract (removes x-driftgate-inferred markers)
-#   uv run driftgate infer-schema --from-cassettes tests/cassettes \
+#   uv run driftgate infer-schema --from-cassettes cassettes \
 #     --out docs/openapi.yaml --promote
 #
 # Evaluate a metrics artifact directly: PROMOTE=0, ROLLBACK=1, HOLD=2

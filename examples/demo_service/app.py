@@ -41,11 +41,11 @@ class SummarizeRequest(BaseModel):
 
 
 def _sse(payload: str) -> bytes:
-    return f"data: {payload}\n\n".encode("utf-8")
+    return f"data: {payload}\n\n".encode()
 
 
 def _event(name: str, payload: str) -> bytes:
-    return f"event: {name}\ndata: {payload}\n\n".encode("utf-8")
+    return f"event: {name}\ndata: {payload}\n\n".encode()
 
 
 @app.get("/healthz")

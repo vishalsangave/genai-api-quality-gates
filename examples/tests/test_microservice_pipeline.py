@@ -10,13 +10,10 @@ from __future__ import annotations
 import json
 import random
 import socket
-import threading
 
 import httpx
 import pytest
-import uvicorn
 
-from examples.demo_service.app import app as demo_app
 from driftgate.contracts.validator import ContractValidator
 from driftgate.metamorphic.evaluator import InvarianceChecker, evaluate_structural_invariance
 from driftgate.metamorphic.relations import AdversarialNoiseRelation
@@ -29,32 +26,13 @@ CHAT = "/v1/chat/completions"
 SUMMARIZE = "/v1/summarize"
 
 
-@pytest.fixture(scope="session")
-def demo_base_url() -> str:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = int(sock.getsockname()[1])
-    server = uvicorn.Server(uvicorn.Config(demo_app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{port}"
-    with httpx.Client(timeout=5.0) as client:
-        while True:
-            try:
-                if client.get(f"{base}/healthz").status_code == 200:
-                    break
-            except httpx.TransportError:
-                pass
-    yield base
-    server.should_exit = True
-    thread.join(timeout=5)
-
-
 @pytest.fixture(scope="module")
 def demo_contract() -> ContractValidator:
     import yaml
 
-    with open("examples/demo_service/openapi.yaml") as handle:
+    from examples.tests.conftest import ROOT
+
+    with (ROOT / "examples" / "demo_service" / "openapi.yaml").open() as handle:
         spec = yaml.safe_load(handle)
     return ContractValidator(spec)
 
@@ -78,9 +56,12 @@ def test_layer1_normal_stream_passes_contract(demo_base_url, demo_contract) -> N
         response = _chat(client, "normal")
         assert response.status_code == 200
         response.read()
-        assert demo_contract.validate_response(
-            "POST", CHAT, 200, headers={"content-type": "text/event-stream"}
-        ) == []
+        assert (
+            demo_contract.validate_response(
+                "POST", CHAT, 200, headers={"content-type": "text/event-stream"}
+            )
+            == []
+        )
 
 
 def test_layer1_invalid_schema_is_caught(demo_base_url, demo_contract) -> None:
@@ -146,7 +127,9 @@ def _dead_base_url() -> str:
 def test_layer2_authorization_redacted_on_disk(tmp_path, demo_base_url) -> None:
     cassette = tmp_path / "redact.yaml"
     store = CassetteStore(cassette, CassetteMode.RECORD, service=demo_base_url)
-    transport = RecordingTransport(httpx.HTTPTransport(), store, fingerprint_config=FingerprintConfig())
+    transport = RecordingTransport(
+        httpx.HTTPTransport(), store, fingerprint_config=FingerprintConfig()
+    )
     with httpx.Client(base_url=demo_base_url, transport=transport, timeout=10.0) as client:
         response = client.post(
             CHAT,
@@ -198,7 +181,11 @@ def test_metamorphic_paraphrase_invariance_with_local_embedder() -> None:
 def test_adversarial_noise_stays_structurally_valid() -> None:
     payloads = [
         {"messages": [{"role": "user", "content": "Replay testing keeps PR gates free and fast."}]},
-        {"messages": [{"role": "user", "content": "Cassette fingerprinting ignores volatile IDs."}]},
+        {
+            "messages": [
+                {"role": "user", "content": "Cassette fingerprinting ignores volatile IDs."}
+            ]
+        },
     ]
     relation = AdversarialNoiseRelation()
     variants = []
