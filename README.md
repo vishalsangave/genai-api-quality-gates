@@ -87,7 +87,7 @@ uv run driftgate version
 
 ## CI
 
-Every pull request runs the full suite automatically (zero API keys, no external calls). Results are stored as workflow artifacts for 90 days.
+Every pull request runs the full suite automatically (zero API keys, no external calls). Results are stored as workflow artifacts for 90 days. Two gates run in sequence: fast **framework unit tests** first (no servers, seconds — catches framework regressions), then the **full gate** with the mock servers.
 
 ## More documentation
 

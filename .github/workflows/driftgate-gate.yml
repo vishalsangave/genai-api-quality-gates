@@ -12,7 +12,38 @@ on:
     types: [labeled]
 
 jobs:
+  framework-tests:
+    name: "Framework unit tests (no server)"
+    # Fast, server-free gate for driftgate/ package changes: runs on every
+    # push/PR but also standalone on any workflow_dispatch labeled framework.
+    if: github.event_name != 'schedule' && github.event.label != 'run-evals'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync Python environment
+        run: uv sync --extra dev
+
+      - name: Run framework unit tests (no servers, <1s)
+        run: uv run pytest tests/ --timeout=60 -v
+
+      - name: Upload framework test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-test-results
+          path: .driftgate/
+          retention-days: 90
+          if-no-files-found: ignore
+
   pr-gate:
+    needs: framework-tests
     if: github.event_name != 'schedule' && github.event.label != 'run-evals'
     runs-on: ubuntu-latest
     timeout-minutes: 30
