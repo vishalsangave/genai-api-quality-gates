@@ -79,10 +79,6 @@ class SSEFrameParser:
     def feed(self, chunk: bytes) -> list[SSEFrame]:
         if not chunk:
             return []
-        # Normalizing at ingress means the rest of the parser only needs to
-        # reason about LF delimiters. A CR can land at a chunk boundary, but
-        # replacing every complete CRLF before frame scanning remains safe:
-        # a dangling CR is retained until the next feed/finish call.
         self._buffer.extend(chunk)
         return self._extract_complete_frames()
 
@@ -92,9 +88,6 @@ class SSEFrameParser:
             self._buffer[-1:] = b"\n"
         self._buffer[:] = self._buffer.replace(b"\r\n", b"\n")
         frames = self._extract_complete_frames()
-        # SSE permits an event to end at EOF only if it includes a final
-        # newline. Treat that as a frame; a partial line remains dangling and
-        # causes ``terminated_cleanly`` to be false in the probe.
         if self._buffer.endswith(b"\n") and self._buffer.strip(b"\n"):
             raw = bytes(self._buffer)
             self._buffer.clear()
@@ -104,7 +97,17 @@ class SSEFrameParser:
         return frames
 
     def _extract_complete_frames(self) -> list[SSEFrame]:
+        # CR normalization rules (bare CR is a line terminator per SSE spec):
+        # see docs/ARCHITECTURE.md "Streaming probe" for the full rationale.
         self._buffer[:] = self._buffer.replace(b"\r\n", b"\n")
+        if b"\r" in self._buffer:
+            # A trailing lone CR may start a CRLF split across chunks; keep
+            # it pending and normalize only the bytes before it.
+            if self._buffer.endswith(b"\r"):
+                head, self._buffer = self._buffer[:-1], self._buffer[-1:]
+            else:
+                head, self._buffer = self._buffer, bytearray()
+            self._buffer[:0] = head.replace(b"\r", b"\n")
         frames: list[SSEFrame] = []
         while True:
             try:
@@ -122,6 +125,12 @@ class SSEFrameParser:
     def _parse_frame(raw: bytes) -> SSEFrame | None:
         if not raw:
             return None
+        # A stray CR can survive CRLF normalization when a producer mixes LF
+        # and CRLF line endings (e.g. b"data: x\r\n\rdata: y\n\n" — the lone
+        # \r starts a line that would otherwise be parsed as field name
+        # "\rdata" and silently dropped). Per the SSE spec a bare CR is a
+        # line terminator, so normalize any remaining CR before line parsing.
+        raw = raw.replace(b"\r", b"\n")
         text = raw.decode("utf-8", errors="replace")
         event: str | None = None
         event_id: str | None = None

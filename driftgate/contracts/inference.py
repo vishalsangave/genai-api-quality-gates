@@ -73,9 +73,7 @@ def cluster_path_templates(paths: Sequence[tuple[str, str]]) -> dict[tuple[str, 
             if len(unique) >= 2 and all(_IDENTIFIER_RE.fullmatch(v) for v in unique):
                 template_parts.append(f"{{param_{index + 1}}}")
             else:
-                # A cluster with non-identical non-identifiers would create a
-                # wrong operation template. Preserve individual literal paths
-                # below by signaling ambiguity.
+                # Ambiguous cluster -> keep literal paths, never guess.
                 template_parts.append(values[0])
         template = "/" + "/".join(template_parts)
         ambiguous = any(
@@ -149,8 +147,7 @@ def infer_json_schema(
         schema["properties"] = properties
         if required:
             schema["required"] = required
-        # Open by default: inferred schema is a compatibility observation, not
-        # a complete design contract.
+        # Open by default: an observation, not a design contract.
         schema["additionalProperties"] = True
     elif types == {"array"}:
         arrays = [sample for sample in samples if isinstance(sample, list)]

@@ -103,8 +103,7 @@ class RecordingTransport(httpx.BaseTransport):
             if interaction is not None:
                 return self._build_replay_response(request, interaction)
 
-        # LIVE never records. RECORD always records. In lenient replay mode a
-        # miss is optionally recorded so `auto_record` can bootstrap cassettes.
+        # LIVE never records; lenient replay records on miss (auto_record).
         response = self.real.handle_request(request)
         should_record = self.store.mode is CassetteMode.RECORD or (
             self.store.mode is CassetteMode.REPLAY_LENIENT and self.record_on_miss

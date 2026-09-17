@@ -79,8 +79,7 @@ class EntitySwapRelation:
         if not replacements:
             return []
 
-        # One combined pass prevents circular swaps (Alice→Bob and Bob→Alice)
-        # from undoing each other in sequential substitutions.
+        # Single pass — sequential substitution lets circular swaps undo.
         entity_pattern = re.compile(
             r"\b("
             + "|".join(re.escape(source) for source in sorted(replacements, key=len, reverse=True))

@@ -138,6 +138,27 @@ class TestFuzzSafety:
             result = fuzz_contract.validate_response("POST", "/v1/orders", 202, body=body)
             assert result == []
 
+    def test_known_defect_non_numeric_item_yields_null_total(
+        self, express_client: ExpressClient, fuzz_contract
+    ) -> None:
+        """Known server defect, pinned: non-numeric items -> ``totalAmount: null`` (see docs/ARCHITECTURE.md)."""
+        response = express_client.post(
+            "/orders",
+            json={"customerId": "c", "items": [0], "shippingAddress": "a"},
+            headers={
+                "Authorization": "Bearer mock-jwt-bearer-token-12345",
+                "X-Correlation-ID": "defect-pin",
+            },
+        )
+        if response.status_code == 202:
+            result = fuzz_contract.validate_response(
+                "POST", "/v1/orders", 202, body=response.json()
+            )
+            assert result, "Defect fixed; update this pin and docs/ARCHITECTURE.md."
+            assert response.json()["totalAmount"] is None
+        else:
+            assert response.status_code == 400
+
     @settings(
         max_examples=40,
         deadline=None,

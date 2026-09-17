@@ -32,8 +32,7 @@ class GovernorThresholds:
     task_success_min: float = 0.80
     p95_latency_ms_max: float = 15_000.0
 
-    # Five-dimensional matrix additions. They stay advisory unless explicitly
-    # promoted to hard gates by a service's configuration.
+    # Advisory by default; promotable to hard in config (see docs/ARCHITECTURE.md).
     context_preservation_min: float = 0.90
     context_preservation_hard: bool = False
     evidence_coverage_min: float = 0.85
@@ -205,8 +204,7 @@ class ReleaseGovernor:
         if metric.key == "task_success_rate" and current.task_success_samples:
             return bootstrap_ci(current.task_success_samples, level=t.ci_level, rng=rng)
         if metric.current is not None:
-            # A scalar metric has no distribution; representing it as a
-            # degenerate CI makes that lack of statistical evidence explicit.
+            # Scalar metric -> degenerate CI (no distribution to resample).
             return CIResult(metric.current, metric.current, metric.current, t.ci_level, 1, True)
         return None
 
@@ -235,9 +233,7 @@ class ReleaseGovernor:
             if metric.current is None:
                 continue
             if metric.baseline is not None and metric_ci is not None:
-                # A scalar baseline is explicitly represented as a degenerate
-                # interval. Baseline samples can be added in a future history
-                # store without changing the decision API.
+                # Scalar baseline -> degenerate interval.
                 base_ci = CIResult(
                     metric.baseline,
                     metric.baseline,

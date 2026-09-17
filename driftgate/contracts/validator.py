@@ -71,9 +71,7 @@ class ContractValidator:
         self.spec: Mapping[str, Any] = spec
         self.strict_status = strict_status
         self._inferred = bool(spec.get("x-driftgate-inferred", False))
-        # An OpenAPI document itself is not a JSON Schema (it has no `$schema`),
-        # so referencing cannot auto-detect a specification here. Its embedded
-        # request/response schemas are Draft 2020-12 by OpenAPI 3.1 contract.
+        # OpenAPI docs lack `$schema`, so referencing can't auto-detect the spec.
         resource = Resource(contents=spec, specification=DRAFT202012)
         self._registry = Registry().with_resource("urn:driftgate:openapi", resource)
         self._operations = self._compile_operations()

@@ -31,6 +31,23 @@ def test_parser_handles_crlf_multiline_comments_and_chunk_boundaries() -> None:
     assert frames[0].data == "first\nsecond"
 
 
+def test_parser_treats_bare_cr_as_line_terminator_per_spec() -> None:
+    """Mixed LF/CRLF producers must not lose frames (see docs/ARCHITECTURE.md)."""
+    parser = SSEFrameParser()
+    frames = parser.feed(b"data: x\r\n\rdata: y\n\n") + parser.finish()
+    assert [frame.data for frame in frames] == ["x", "y"]
+
+    # Bare-CR delimiter split across chunks.
+    parser = SSEFrameParser()
+    frames = parser.feed(b"data: a\r") + parser.feed(b"\rdata: b\n\n") + parser.finish()
+    assert [frame.data for frame in frames] == ["a", "b"]
+
+    # A CRLF split across chunks is one terminator, not two.
+    parser = SSEFrameParser()
+    frames = parser.feed(b"data: a\r") + parser.feed(b"\ndata: b\n\n") + parser.finish()
+    assert [frame.data for frame in frames] == ["a\nb"]
+
+
 def test_probe_calculates_frames_and_clean_termination() -> None:
     response = _response(b'data: {"delta":"one"}\n\ndata: {"delta":"two"}\n\ndata: [DONE]\n\n')
     telemetry = StreamingProbe().observe(response, time.perf_counter_ns())

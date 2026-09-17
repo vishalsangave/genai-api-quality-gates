@@ -149,8 +149,7 @@ class CassetteStore:
     def lookup(self, fp: Fingerprint) -> CassetteInteraction | None:
         candidates = self._index.get(fp.digest)
         if candidates:
-            # Do not consume an entry whose digest collides or whose broad
-            # ignore lists happened to collapse a semantically different call.
+            # Secondary canonical check guards digest collisions.
             for _ in range(len(candidates)):
                 candidate = candidates.popleft()
                 if candidate.canonical == fp.canonical:

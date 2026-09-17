@@ -85,8 +85,7 @@ def bootstrap_ci(
     generator = rng or np.random.default_rng()
     boot_stats = np.empty(B, dtype=float)
     offset = 0
-    # Keep sampled value matrices under ~B * block_size elements rather than
-    # accidentally allocating B*n for very large run histories.
+    # Chunking bounds the B x n index matrix (see docs/ARCHITECTURE.md).
     while offset < B:
         count = min(block_size, B - offset)
         indices = generator.integers(0, n, size=(count, n))
@@ -120,8 +119,7 @@ def mann_kendall(series: ArrayLike, *, alpha: float = 0.05, min_n: int = 4) -> M
     if n < min_n:
         return MKResult(0.0, 0.0, 0.0, 1.0, "insufficient_data")
 
-    # Lower triangle holds value[j] - value[i] for j > i, matching the
-    # conventional S = sum(sign(x_j - x_i)) definition.
+    # tril(j>i) = sum(sign(x_j - x_i)) — the conventional S.
     differences = np.subtract.outer(values, values)
     s = float(np.sign(differences)[np.tril_indices(n, k=-1)].sum())
     _, counts = np.unique(values, return_counts=True)
