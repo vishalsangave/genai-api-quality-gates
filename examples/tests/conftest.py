@@ -37,11 +37,28 @@ EXPRESS_DIR = ROOT / "examples" / "express_mock"
 TEMPLATE = ROOT / "examples" / "driftgate.service.template.yaml"
 T = TypeVar("T")
 
+# Set DRIFT_GATE_TRACE=1 to print every request/response pair the suite sends.
+TRACE = os.environ.get("DRIFT_GATE_TRACE", "") == "1"
+
 
 class ExpressClient(httpx.Client):
     """httpx client with the suite's precompiled contract validators attached."""
 
     contracts: dict[str, ContractValidator]
+
+    def _trace(self, response: httpx.Response) -> None:
+        """Print method/URL -> status/body when DRIFT_GATE_TRACE=1 (or CI live)."""
+        if not TRACE:
+            return
+        request = response.request
+        body = request.content.decode("utf-8", errors="replace") or "-"
+        print(f"\n>> {request.method} {request.url}\n   request body: {body}")
+        print(f"<< {response.status_code} {response.text[:300] or '-'}")
+
+    def send(self, request: httpx.Request, **kwargs: object) -> httpx.Response:
+        response = super().send(request, **kwargs)
+        self._trace(response)
+        return response
 
 
 def poll_until(
