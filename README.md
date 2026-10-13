@@ -71,6 +71,10 @@ uv run pytest examples/tests/test_order_export_service_fuzz.py -v
 uv run pytest examples/tests/test_config_driven_order_export.py \
   --driftgate-config examples/driftgate.service.template.yaml -v
 
+# LLM-as-a-judge evaluation (nightly tests execute only when configured):
+uv sync --extra judge
+DRIFT_GATE_JUDGE_API_KEY=sk-... uv run pytest -m nightly -v
+
 # Framework CLI: run tests, then the release-gate decision
 # (exit codes: PROMOTE=0, ROLLBACK=1, HOLD=2):
 uv run driftgate run --config driftgate.config.yaml
@@ -82,8 +86,34 @@ uv run driftgate version
 
 - **Order & export API suites** — authentication, order creation and totals, the 5s/15s order state machine, cancellation rules (409 after completion), the 60-second export job, and CSV download content.
 - **Fuzz suite** — machine-generated bad inputs against the live API; the API must always answer with a declared error, never crash.
+- **Non-deterministic endpoint suite** — how to test varying AI outputs: shape-not-value contracts, output diversity, semantic invariance thresholds, seeded reproducibility, and rubric-based judgment.
 - **Contract suites** — every response validated against the API's OpenAPI spec.
 - **Framework suites** — the quality-gate machinery itself (contracts, replay, streaming, statistics).
+
+## Adopting DriftGate in your own project
+
+DriftGate isn't tied to this repo's examples — any project with a REST API can wire it up in about 10 minutes:
+
+```bash
+# 1. Install (the pytest plugin registers itself).
+uv add driftgate pytest
+
+# 2. Scaffold config, a starter test suite, and a CI workflow.
+uv run driftgate init --base-url http://localhost:8000
+
+# 3. Start your API, then capture real traffic and bootstrap an advisory contract.
+uv run driftgate capture --base-url http://localhost:8000 --out openapi.yaml
+#    (or skip capture and point contract.openapi_spec at an existing OpenAPI spec:
+#     uv run driftgate init --spec openapi.yaml)
+
+# 4. Edit driftgate.config.yaml → contract.openapi_spec: openapi.yaml, then run your first gate.
+uv run pytest -v
+
+# 5. Read what happened: per-endpoint results, spec coverage, what changed vs the last build.
+uv run driftgate report
+```
+
+Every pytest run writes `.driftgate/report.md` (also shown in CI job summaries) with: test totals, endpoints exercised, spec-coverage %, the release-governor decision when metrics exist, and a **"Changed vs last build"** spec diff (new/removed/changed endpoints, breaking changes flagged). Adding a feature to your API means adding the spec entry — the gate, fuzz oracle, and report follow automatically. Full details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Adoption tooling" and "Build report".
 
 ## CI
 

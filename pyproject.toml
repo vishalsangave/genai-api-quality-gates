@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+judge = [
+    "anthropic>=0.40",
+    "openai>=1.40",
+]
 dev = [
     "pytest>=8",
     "pytest-timeout>=2.3",

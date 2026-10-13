@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,20 @@ from driftgate.config import DriftGateConfig
 from driftgate.contracts.validator import ContractValidator
 from driftgate.recorder.cassette import CassetteMode, CassetteStore
 from driftgate.recorder.interceptor import build_client
+from driftgate.reporting import (
+    SNAPSHOT_JSON,
+    CallTracker,
+    RunTotals,
+    build_coverage,
+    build_endpoint_rows,
+    evaluate_governor,
+    install_httpx_wrapper,
+    merge_outcomes,
+    uninstall_httpx_wrapper,
+)
+from driftgate.specdiff import (
+    save_snapshot as save_spec_snapshot,
+)
 from driftgate.streaming.probe import StreamingProbe, StreamTelemetry
 from driftgate.streaming.probe import assert_streaming_sla as _assert_sla
 
@@ -37,7 +52,41 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: long-running stateful endpoint test")
     config.addinivalue_line("markers", "live: test requires a reachable target service")
     config.stash[_METRICS_KEY] = {}
+    _OUTCOMES.clear()
+    _TRACKER.calls_by_test.clear()
+    install_httpx_wrapper(_TRACKER)
 
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    uninstall_httpx_wrapper()
+
+
+def pytest_runtest_logstart(nodeid: str, location: object) -> None:
+    _TRACKER.start_test(nodeid)
+
+
+def pytest_runtest_logfinish(nodeid: str, location: object) -> None:
+    _TRACKER.finish_test()
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    try:
+        phases = _OUTCOMES.setdefault(report.nodeid, {})
+        if report.when == "call":
+            phases["call"] = report.outcome
+        elif report.when == "setup":
+            if report.outcome == "failed":
+                phases["setup_failed"] = True
+            elif report.outcome == "skipped":
+                phases["call"] = "skipped"
+        elif report.when == "teardown" and report.outcome == "failed":
+            phases["teardown_failed"] = True
+    except Exception:  # pragma: no cover - reporting must never break a run
+        pass
+
+
+_TRACKER = CallTracker()
+_OUTCOMES: dict[str, dict[str, Any]] = {}
 
 _METRICS_KEY: pytest.StashKey[dict[str, Any]] = pytest.StashKey()
 
@@ -58,14 +107,72 @@ def record_run_metrics(pytestconfig: pytest.Config, **metrics: Any) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Persist voluntarily-recorded metrics for the CLI release governor."""
-    metrics = session.config.stash[_METRICS_KEY]
-    if not metrics:
+    """Persist metrics for the CLI governor, then write the build report."""
+    try:
+        metrics = session.config.stash[_METRICS_KEY]
+        if metrics:
+            payload = {"run_id": session.name, **metrics, "pytest_exitstatus": exitstatus}
+            Path(".driftgate").mkdir(parents=True, exist_ok=True)
+            Path(".driftgate/metrics.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            )
+    except Exception as error:
+        print(f"driftgate: metrics persistence failed: {error}", file=sys.stderr)
+    try:
+        _write_build_report(session, exitstatus)
+    except Exception as error:  # pragma: no cover - reporting must never break a run
+        print(f"driftgate: report generation failed: {error}", file=sys.stderr)
+
+
+def _write_build_report(session: pytest.Session, exitstatus: int) -> None:
+    """Build report.json + report.md + spec-snapshot.json; never raises outward."""
+    if hasattr(session.config, "workerinput"):  # xdist worker: skip artifact writes
         return
-    payload = {"run_id": session.name, **metrics, "pytest_exitstatus": exitstatus}
-    output = Path(".driftgate/metrics.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    from datetime import UTC, datetime
+
+    from driftgate import reporting as rpt
+    from driftgate import specdiff
+
+    config = _effective_config(session.config)
+    validator = None
+    if config.contract.openapi_spec:
+        try:
+            validator = ContractValidator.from_file(config.contract.openapi_spec)
+        except Exception as error:
+            validator = None
+            print(f"driftgate: contract validator skipped: {error}", file=sys.stderr)
+
+    old_snapshot = specdiff.load_snapshot(SNAPSHOT_JSON)
+    spec_diff = None
+    if validator is not None:
+        try:
+            new_snapshot = specdiff.snapshot(validator.spec)
+            spec_diff = specdiff.diff(old_snapshot, new_snapshot)
+            save_spec_snapshot(SNAPSHOT_JSON, new_snapshot)
+        except Exception as error:
+            print(f"driftgate: spec diff skipped: {error}", file=sys.stderr)
+
+    governor = evaluate_governor(config)
+    outcomes = merge_outcomes(_OUTCOMES)
+    rows, touched = build_endpoint_rows(_TRACKER, outcomes, validator)
+    coverage = build_coverage(validator, touched)
+    totals = RunTotals(
+        passed=sum(1 for o in outcomes.values() if o == "passed"),
+        failed=sum(1 for o in outcomes.values() if o == "failed"),
+        errors=sum(1 for o in outcomes.values() if o == "error"),
+        skipped=sum(1 for o in outcomes.values() if o == "skipped"),
+    )
+    report = rpt.ReportData(
+        run_id=session.name,
+        timestamp=datetime.now(UTC).isoformat(),
+        exitstatus=exitstatus,
+        totals=totals,
+        endpoints=rows,
+        coverage=coverage,
+        governor=governor,
+        spec_diff=spec_diff.to_dict() if spec_diff else None,
+    )
+    rpt.write_report(report)
 
 
 def _effective_config(pytestconfig: pytest.Config) -> DriftGateConfig:

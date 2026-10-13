@@ -85,6 +85,15 @@ jobs:
           DRIFT_GATE_JUDGE_API_KEY: ""
         run: uv run pytest -m "not nightly" --timeout=180 -v
 
+      - name: Publish build report to job summary
+        if: always()
+        run: |
+          if [ -f .driftgate/report.md ]; then
+            cat .driftgate/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No DriftGate report was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload PR gate test results
         if: always()
         uses: actions/upload-artifact@v4

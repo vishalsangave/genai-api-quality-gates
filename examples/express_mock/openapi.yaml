@@ -229,6 +229,83 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+  /v1/recommendations:
+    get:
+      parameters:
+        - in: query
+          name: seed
+          required: false
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: Personalized recommendations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, generatedAt, recommendations]
+                properties:
+                  requestId: { type: string, pattern: '^REQ-\d{5}$' }
+                  generatedAt: { type: string, format: date-time }
+                  recommendations:
+                    type: array
+                    minItems: 3
+                    maxItems: 3
+                    items:
+                      type: object
+                      required: [sku, title, score, reason]
+                      properties:
+                        sku: { type: string, pattern: '^SKU-\d{4}$' }
+                        title: { type: string, minLength: 1 }
+                        score: { type: number, minimum: 0, maximum: 1 }
+                        reason: { type: string, minLength: 1 }
+                      additionalProperties: false
+                additionalProperties: false
+        '400':
+          description: Invalid seed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/insights:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customerId, prompt]
+              properties:
+                customerId: { type: string, minLength: 1 }
+                prompt: { type: string, minLength: 1 }
+              additionalProperties: false
+      responses:
+        '200':
+          description: Generated operational insight
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [insight, confidence]
+                properties:
+                  insight: { type: string, minLength: 1 }
+                  confidence: { type: number, minimum: 0, maximum: 1 }
+                additionalProperties: false
+        '400':
+          description: Invalid payload
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 components:
   schemas:
     Error:

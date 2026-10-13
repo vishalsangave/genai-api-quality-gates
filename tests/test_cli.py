@@ -130,3 +130,109 @@ def test_version_command() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert result.stdout.strip() == "0.1.0"
+
+
+def test_gate_creates_history_on_cold_start(tmp_path) -> None:
+    """--history must not require the file to pre-exist (bootstrap deadlock fix)."""
+    metrics = tmp_path / "metrics.json"
+    _write_metrics(metrics)
+    history = tmp_path / "history.json"
+    assert not history.exists()
+
+    result = runner.invoke(app, ["gate", "--metrics", str(metrics), "--history", str(history)])
+
+    assert result.exit_code == 0
+    assert history.exists()
+    entries = json.loads(history.read_text())
+    assert len(entries) == 1
+    assert entries[0]["run_id"] == "cli-test"
+
+
+def test_gate_history_ring_buffer_trims_to_keep(tmp_path) -> None:
+    from driftgate.cli import HISTORY_KEEP
+
+    metrics = tmp_path / "metrics.json"
+    _write_metrics(metrics)
+    history = tmp_path / "history.json"
+    preseed = [{"run_id": f"old-{i}", "p95_latency_ms": 100.0} for i in range(HISTORY_KEEP)]
+    history.write_text(json.dumps(preseed))
+
+    result = runner.invoke(app, ["gate", "--metrics", str(metrics), "--history", str(history)])
+
+    assert result.exit_code == 0
+    entries = json.loads(history.read_text())
+    assert len(entries) == HISTORY_KEEP
+    assert entries[-1]["run_id"] == "cli-test"
+    assert entries[0]["run_id"] == "old-1"  # oldest trimmed
+
+
+def test_gate_corrupt_history_restarts(tmp_path) -> None:
+    metrics = tmp_path / "metrics.json"
+    _write_metrics(metrics)
+    history = tmp_path / "history.json"
+    history.write_text("{not a list")
+
+    result = runner.invoke(app, ["gate", "--metrics", str(metrics), "--history", str(history)])
+
+    assert result.exit_code == 0
+    entries = json.loads(history.read_text())
+    assert len(entries) == 1
+    assert entries[0]["run_id"] == "cli-test"
+
+
+def test_gate_without_history_flag_writes_nothing(tmp_path) -> None:
+    metrics = tmp_path / "metrics.json"
+    _write_metrics(metrics)
+    result = runner.invoke(app, ["gate", "--metrics", str(metrics)])
+    assert result.exit_code == 0
+    assert not (tmp_path / "history.json").exists()
+
+
+def test_report_command_renders_markdown(tmp_path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "run_id": "r1",
+                "timestamp": "t",
+                "exitstatus": 0,
+                "totals": {"passed": 3, "failed": 0, "errors": 0, "skipped": 0, "total": 3},
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "template": "/orders/{orderId}",
+                        "tests": 2,
+                        "failed": 0,
+                        "statuses_seen": [200, 404],
+                    }
+                ],
+                "coverage": None,
+                "governor": {
+                    "decision": "PROMOTE",
+                    "reasons": [],
+                    "hard_failures": [],
+                    "soft_signals": [],
+                },
+                "spec_diff": None,
+            }
+        )
+    )
+    result = runner.invoke(app, ["report", "--path", str(report_path)])
+    assert result.exit_code == 0
+    assert "# DriftGate Build Report" in result.stdout
+    assert "PROMOTE" in result.stdout
+    assert "/orders/{orderId}" in result.stdout
+
+
+def test_report_command_json_mode(tmp_path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({"run_id": "r", "totals": {}, "endpoints": []}))
+    result = runner.invoke(app, ["report", "--json", "--path", str(report_path)])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["run_id"] == "r"
+
+
+def test_report_command_missing_file(tmp_path) -> None:
+    result = runner.invoke(app, ["report", "--path", str(tmp_path / "absent.json")])
+    assert result.exit_code == 1
+    assert "No DriftGate report" in result.stderr

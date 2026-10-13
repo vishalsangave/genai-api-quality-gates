@@ -162,6 +162,11 @@ class ContractValidator:
             None,
         )
 
+    def template_for(self, method: str, path: str) -> str | None:
+        """Public template lookup: concrete request path -> spec template, or None."""
+        op = self._operation(method, path)
+        return op.template if op is not None else None
+
     @staticmethod
     def _pointer(parts: Any) -> str:
         return "/" + "/".join(str(p).replace("~", "~0").replace("/", "~1") for p in parts)

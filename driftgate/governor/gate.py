@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -57,6 +57,20 @@ class RunMetrics:
     task_success_samples: Sequence[float] = ()
     context_preservation: float | None = None
     evidence_coverage: float | None = None
+
+
+def run_metrics_from_dict(data: Mapping[str, Any]) -> RunMetrics:
+    """Best-effort RunMetrics from a loose JSON mapping (missing fields defaulted)."""
+    return RunMetrics(
+        run_id=data.get("run_id", "unnamed"),
+        safety_pass_rate=data.get("safety_pass_rate"),
+        task_success_rate=data.get("task_success_rate"),
+        p95_latency_ms=data.get("p95_latency_ms"),
+        latency_samples=data.get("latency_samples", ()),
+        task_success_samples=data.get("task_success_samples", ()),
+        context_preservation=data.get("context_preservation"),
+        evidence_coverage=data.get("evidence_coverage"),
+    )
 
 
 @dataclass

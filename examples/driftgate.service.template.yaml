@@ -59,7 +59,11 @@ metamorphic_assertions:
     mutator: local
 
 # The deterministic judge is the default and is what keeps PR checks free.
-# Configure a real judge only in a scheduled/nightly environment.
+# Configure a real judge only in a scheduled/nightly environment: set
+# provider to "anthropic" or "openai", install the SDKs with
+# `uv sync --extra judge`, and export the API key named by api_key_env.
+# Optional: model overrides the default judge model (temperature is pinned
+# to 0). Built by driftgate.metamorphic.factory.build_judge(config.judge).
 judge:
   provider: deterministic
   api_key_env: DRIFT_GATE_JUDGE_API_KEY
