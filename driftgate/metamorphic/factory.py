@@ -20,9 +20,6 @@ if TYPE_CHECKING:
     from driftgate.config import JudgeConfig
     from driftgate.metamorphic.evaluator import Judge
 
-DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-
 
 def build_judge(config: JudgeConfig) -> Judge:
     if config.provider == "deterministic":
@@ -31,6 +28,8 @@ def build_judge(config: JudgeConfig) -> Judge:
         return LLMRubricJudge(_anthropic_transport(config))
     if config.provider == "openai":
         return LLMRubricJudge(_openai_transport(config))
+    if config.provider == "google":
+        return LLMRubricJudge(_google_transport(config))
     raise ValueError(f"unknown judge provider: {config.provider!r}")
 
 
@@ -48,7 +47,7 @@ def _anthropic_transport(config: JudgeConfig):
     import anthropic
 
     client = anthropic.Anthropic(api_key=_resolve_api_key(config))
-    model = config.model or DEFAULT_ANTHROPIC_MODEL
+    model = config.anthropic.model
 
     def transport(prompt: str) -> str:
         response = client.messages.create(
@@ -62,11 +61,39 @@ def _anthropic_transport(config: JudgeConfig):
     return transport
 
 
+def _google_transport(config: JudgeConfig):
+    import httpx
+
+    client = httpx.Client(
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        timeout=config.google.timeout,
+        headers={"x-goog-api-key": _resolve_api_key(config)},
+    )
+    model = config.google.model
+
+    def transport(prompt: str) -> str:
+        response = client.post(
+            f"/models/{model}:generateContent",
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0},
+            },
+        )
+        response.raise_for_status()
+        candidates = response.json().get("candidates", [])
+        if not candidates:
+            return ""
+        parts = candidates[0].get("content", {}).get("parts", [])
+        return " ".join(part.get("text", "") for part in parts)
+
+    return transport
+
+
 def _openai_transport(config: JudgeConfig):
     import openai
 
     client = openai.OpenAI(api_key=_resolve_api_key(config))
-    model = config.model or DEFAULT_OPENAI_MODEL
+    model = config.openai.model
 
     def transport(prompt: str) -> str:
         response = client.chat.completions.create(

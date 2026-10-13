@@ -236,3 +236,31 @@ def test_report_command_missing_file(tmp_path) -> None:
     result = runner.invoke(app, ["report", "--path", str(tmp_path / "absent.json")])
     assert result.exit_code == 1
     assert "No DriftGate report" in result.stderr
+
+
+def test_dataset_approve_skips_duplicates_and_bodyless_interactions(tmp_path):
+    import json
+
+    import yaml
+    from typer.testing import CliRunner
+
+    from driftgate.cli import app
+
+    def interaction(body):
+        return {
+            "fingerprint": "f", "canonical": "c",
+            "request": {"method": "POST", "path": "/chat", "headers": {}, "body": body},
+            "response": {"status": 200, "headers": {}, "body": {"answer": "ok"}},
+        }
+
+    cassette = tmp_path / "c.yaml"
+    cassette.write_text(yaml.safe_dump({"interactions": [interaction({"prompt": "hi"}), interaction(None)]}))
+    out = tmp_path / "golden.jsonl"
+    runner = CliRunner()
+    for _ in range(2):  # re-approving the same cassette must not duplicate examples
+        result = runner.invoke(app, ["dataset", "approve", str(cassette), "--out", str(out)], input="y\ny\n")
+        assert result.exit_code == 0, result.output
+    assert [json.loads(line) for line in out.read_text().splitlines()] == [
+        {"prompt": {"prompt": "hi"}, "response": {"answer": "ok"}}
+    ]
+    assert "no body" in result.output

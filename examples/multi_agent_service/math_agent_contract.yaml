@@ -1,0 +1,40 @@
+name: "MathAgent"
+version: "1.0.0"
+description: "Handles mathematical calculations by using the calculator tool."
+
+allowed_tools:
+  - "calculator"
+
+input_schema:
+  type: "object"
+  properties:
+    prompt:
+      type: "string"
+      description: "The user's full, unprocessed prompt."
+  required:
+    - "prompt"
+
+output_schema:
+  type: "object"
+  properties:
+    response:
+      type: "string"
+      description: "The final, user-facing response."
+    agent_name:
+      type: "string"
+      const: "MathAgent"
+    tool_calls:
+      type: "array"
+      items:
+        type: "object"
+        properties:
+          tool_name:
+            type: "string"
+            const: "calculator"
+          tool_input:
+            type: "string"
+        required: ["tool_name", "tool_input"]
+  required:
+    - "response"
+    - "agent_name"
+    - "tool_calls"

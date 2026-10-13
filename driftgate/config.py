@@ -106,6 +106,27 @@ class QualityGateConfig(BaseModel):
     on_indeterminate: Literal["HOLD", "ROLLBACK", "PROMOTE"] = "HOLD"
 
 
+class OllamaConfig(BaseModel):
+    """Ollama-specific judge configuration."""
+    model: str = "phi3"
+    base_url: str = "http://localhost:11434"
+    timeout: int = 30
+
+class AnthropicConfig(BaseModel):
+    """Anthropic-specific judge configuration."""
+    model: str = "claude-haiku-4-5-20251001"
+    timeout: int = 60
+
+class OpenAIConfig(BaseModel):
+    """OpenAI-specific judge configuration."""
+    model: str = "gpt-4o-mini"
+    timeout: int = 60
+
+class GoogleConfig(BaseModel):
+    """Google (Gemini) judge configuration."""
+    model: str = "gemini-2.0-flash"
+    timeout: int = 60
+
 class JudgeConfig(BaseModel):
     """LLM-as-a-judge provider selection.
 
@@ -115,9 +136,34 @@ class JudgeConfig(BaseModel):
     configured *and* the referenced API key environment variable resolves.
     """
 
-    provider: Literal["deterministic", "openai", "anthropic"] = "deterministic"
-    model: str | None = None
+    provider: Literal["deterministic", "ollama", "anthropic", "openai", "google"] = "deterministic"
     api_key_env: str = "DRIFT_GATE_JUDGE_API_KEY"
+    # What a test does when the judge cannot be reached or has no API key:
+    # "fail" (default, fail closed) or "skip" (local development only).
+    on_error: Literal["fail", "skip"] = "fail"
+    # Cosine threshold for the offline judge used when provider is "deterministic".
+    similarity_threshold: float = Field(default=0.8, ge=-1.0, le=1.0)
+
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    google: GoogleConfig = Field(default_factory=GoogleConfig)
+
+
+class AgentsConfig(BaseModel):
+    """Where to find the agent trace a multi-agent service returns."""
+
+    capture_traces: bool = True
+    trace_header: str = "x-driftgate-trace"
+    trace_body_key: str | None = "trace"
+
+
+class DatasetsConfig(BaseModel):
+    """What a test does when its golden dataset is missing or invalid."""
+
+    # "skip": the test is skipped with a how-to-create-it note (default; nothing looks broken
+    # while a team is still building its dataset). "fail": error the test (strict CI).
+    on_problem: Literal["skip", "fail"] = "skip"
 
 
 class GovernorConfig(BaseModel):
@@ -159,6 +205,8 @@ class DriftGateConfig(BaseModel):
     metamorphic_assertions: list[MetamorphicAssertionConfig] = Field(default_factory=list)
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    datasets: DatasetsConfig = Field(default_factory=DatasetsConfig)
     governor: GovernorConfig = Field(default_factory=GovernorConfig)
 
     @classmethod

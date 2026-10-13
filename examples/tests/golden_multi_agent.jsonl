@@ -1,0 +1,3 @@
+{"prompt": {"prompt": "summarize the following text: ..."}, "response": {"response": "In short: The user wants to summarize the text 'summarize the following text: ...'.", "agent_name": "SummarizerAgent", "tool_calls": []}}
+{"prompt": {"prompt": "translate this to French: ..."}, "response": {"response": "Voici la traduction: The user wants to translate the text 'translate this to French: ...'.", "agent_name": "TranslatorAgent", "tool_calls": []}}
+{"prompt": {"prompt": "calculate 3 * 5"}, "response": {"response": "The result is 15.", "agent_name": "MathAgent", "tool_calls": [{"tool_name": "calculator", "tool_input": "calculate 3 * 5"}]}}

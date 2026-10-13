@@ -142,6 +142,94 @@ Think step by step about the rubric. Do not use a numerical scale. End with
 exactly one final line: VERDICT: PASS or VERDICT: FAIL.
 """
 
+SEMANTIC_SIMILARITY_TEMPLATE = """You are a quality-control evaluator. Your task is to determine if a new AI-generated response is a valid substitute for a previously approved 'golden' response, given the original user's prompt.
+
+The 'New Response' is a failure (FAIL) if it loses critical information, introduces contradictions, or changes the core meaning of the 'Golden Response'. It is a success (PASS) if it preserves the essential meaning, even if the wording, tone, or formatting is different.
+
+User Prompt:
+{prompt}
+
+Golden Response:
+{golden_response}
+
+New Response:
+{actual_response}
+
+Think step by step about whether the New Response is a valid semantic substitute for the Golden Response. End with exactly one final line: VERDICT: PASS or VERDICT: FAIL.
+"""
+
+
+class SemanticComparer(Protocol):
+    def compare(
+        self,
+        prompt: str,
+        golden_response: str,
+        actual_response: str,
+        *,
+        rubric_id: str | None = None,
+    ) -> JudgeVerdict:
+        """Is ``actual_response`` a valid substitute for ``golden_response``?"""
+
+
+class SemanticSimilarityJudge:
+    """LLM judge comparing a response to an approved golden response."""
+
+    def __init__(self, transport: Callable[[str], str]) -> None:
+        self.transport = transport
+
+    def compare(
+        self,
+        prompt: str,
+        golden_response: str,
+        actual_response: str,
+        *,
+        rubric_id: str | None = None,
+    ) -> JudgeVerdict:
+        rendered = SEMANTIC_SIMILARITY_TEMPLATE.format(
+            prompt=prompt, golden_response=golden_response, actual_response=actual_response
+        )
+        first = parse_verdict(self.transport(rendered), rubric_id=rubric_id)
+        if first.rationale.startswith("Unparsable"):
+            retry = (
+                rendered
+                + "\nYour previous output was invalid. End with VERDICT: PASS or VERDICT: FAIL."
+            )
+            return parse_verdict(self.transport(retry), rubric_id=rubric_id)
+        return first
+
+
+class EmbeddingSimilarityJudge:
+    """Free, offline stand-in used when no LLM judge is configured.
+
+    Compares the response to the golden one with the local ``HashingEmbedder``.
+    That measures lexical/n-gram overlap, not meaning: it reliably catches
+    empty, truncated or off-topic responses and unchanged ones, and it will
+    flag legitimate rewordings. Use an LLM judge for nightly semantic checks.
+    It never passes by default: a response must clear ``threshold``.
+    """
+
+    def __init__(
+        self, embedder: EmbeddingProvider | None = None, *, threshold: float = 0.8
+    ) -> None:
+        self.checker = InvarianceChecker(embedder, threshold=threshold)
+
+    def compare(
+        self,
+        prompt: str,
+        golden_response: str,
+        actual_response: str,
+        *,
+        rubric_id: str | None = None,
+    ) -> JudgeVerdict:
+        del prompt
+        result = self.checker.check(golden_response, actual_response, "golden_similarity")
+        verdict = "PASS" if result.passed else "FAIL"
+        rationale = (
+            f"lexical similarity {result.similarity:.3f} "
+            f"{'>=' if result.passed else '<'} threshold {result.threshold:.3f}\nVERDICT: {verdict}"
+        )
+        return JudgeVerdict(result.passed, rationale, rubric_id)
+
 
 def parse_verdict(text: str, *, rubric_id: str | None = None) -> JudgeVerdict:
     """Fail closed if a remote judge does not emit the required binary tail."""

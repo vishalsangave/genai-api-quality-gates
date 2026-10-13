@@ -49,10 +49,36 @@ streaming_sla:
 metamorphic_assertions: []
 
 judge:
-  # The deterministic judge keeps the PR gate at zero cost; switch to a real
-  # provider only in a scheduled nightly environment.
-  provider: deterministic
-  api_key_env: DRIFT_GATE_JUDGE_API_KEY
+  # "deterministic" is free and offline (the PR-gate default). For semantic checks in
+  # nightly runs use "ollama", "openai", "anthropic" or "google"; those read the API key from
+  # the environment variable named by api_key_env and FAIL the test if it is missing.
+  provider: "deterministic"
+  api_key_env: "DRIFT_GATE_JUDGE_API_KEY"
+  on_error: "fail"            # "skip" only for local development
+  similarity_threshold: 0.8   # offline judge: cosine similarity to the golden response
+
+  ollama:
+    # The model to use for judging (e.g., "phi3", "llama3")
+    model: "phi3"
+    # The base URL of your Ollama server
+    base_url: "http://localhost:11434"
+    # Timeout in seconds
+    timeout: 30
+
+  # Example for Anthropic (uncomment to use)
+  # anthropic:
+  #   model: "claude-haiku-4-5-20251001"
+  #   timeout: 60
+
+  # Example for OpenAI (uncomment to use)
+  # openai:
+  #   model: "gpt-4o-mini"
+  #   timeout: 60
+
+  # Example for Google (uncomment to use)
+  # google:
+  #   model: "gemini-2.0-flash"
+  #   timeout: 60
 
 governor:
   safety_pass_rate_min: 1.0

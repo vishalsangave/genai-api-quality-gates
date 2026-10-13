@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import pytest
 
-from driftgate.config import DriftGateConfig
+from driftgate.agents.capture import TraceCollector
+from driftgate.agents.capture import attach as attach_traces
+from driftgate.agents.contracts import AgentContract
+from driftgate.config import DriftGateConfig, JudgeConfig
 from driftgate.contracts.validator import ContractValidator
+from driftgate.datasets import CHECK_HINT, GENERATE_HINT, check_dataset
+from driftgate.metamorphic.evaluator import (
+    EmbeddingSimilarityJudge,
+    SemanticComparer,
+    SemanticSimilarityJudge,
+)
 from driftgate.recorder.cassette import CassetteMode, CassetteStore
 from driftgate.recorder.interceptor import build_client
 from driftgate.reporting import (
@@ -46,8 +56,72 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--cassette-dir", metavar="PATH", help="Override configured cassette_dir")
 
 
+def _resolve_dataset(raw: str, metafunc: pytest.Metafunc) -> Path | None:
+    """Try the path as given, then relative to the test file, then the rootdir."""
+    candidates = [Path(raw)]
+    if not Path(raw).is_absolute():
+        candidates += [Path(metafunc.definition.path).parent / raw, metafunc.config.rootpath / raw]
+    return next((c for c in candidates if c.is_file()), None)
+
+
+def _dataset_param(reason: str, *, skip: bool) -> Any:
+    """One placeholder case that skips or fails, so a bad dataset never aborts collection."""
+    mark = pytest.mark.skip(reason=reason) if skip else pytest.mark.driftgate_dataset_error(reason)
+    return pytest.param(None, None, marks=mark, id="GoldenDataset")
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Generate tests from a golden dataset file or a red team attack library."""
+    marker = metafunc.definition.get_closest_marker("golden_dataset")
+    if marker is not None and {"prompt", "golden_response"} <= set(metafunc.fixturenames):
+        if not marker.args or not isinstance(marker.args[0], str):
+            raise pytest.UsageError(
+                "@pytest.mark.golden_dataset requires one string argument for the file path."
+            )
+        dataset_path = _resolve_dataset(marker.args[0], metafunc)
+        skip_problems = _effective_config(metafunc.config).datasets.on_problem == "skip"
+        if dataset_path is None:
+            cases = [_dataset_param(
+                f"Golden dataset not found: {marker.args[0]}. "
+                + GENERATE_HINT.format(path=marker.args[0]), skip=skip_problems,
+            )]
+        else:
+            report = check_dataset(dataset_path)
+            if report.errors:
+                cases = [_dataset_param(
+                    f"Golden dataset {dataset_path} is invalid ({report.summary()}). "
+                    + CHECK_HINT.format(path=dataset_path), skip=skip_problems,
+                )]
+            elif not report.examples:
+                cases = [_dataset_param(f"Golden dataset is empty: {dataset_path}", skip=True)]
+            else:
+                cases = [
+                    pytest.param(e["prompt"], e["response"], id=f"GoldenExample-{i}")
+                    for i, e in enumerate(report.examples)
+                ]
+        metafunc.parametrize(("prompt", "golden_response"), cases)
+
+    red_team = metafunc.definition.get_closest_marker("red_team")
+    if red_team is not None and "attack_prompt" in metafunc.fixturenames:
+        from driftgate.security.prompt_attacks import attacks_for
+
+        try:
+            attacks = attacks_for(*red_team.args)
+        except ValueError as e:
+            raise pytest.UsageError(f"@pytest.mark.red_team: {e}") from e
+        metafunc.parametrize(
+            "attack_prompt",
+            attacks,
+            ids=[f"RedTeam-{i}" for i in range(len(attacks))],
+        )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "driftgate_cassette(name): use a shared cassette filename")
+    config.addinivalue_line("markers", "golden_dataset(path): parameterize a test with a golden dataset")
+    config.addinivalue_line("markers", "driftgate_dataset_error(reason): internal; fails a test whose golden dataset is unusable")
+    config.addinivalue_line("markers", "agent_contract(path): specify the agent contract for a test")
+    config.addinivalue_line("markers", "red_team(*categories): parameterize attack_prompt with the attack library, optionally limited to categories (injection, tool_abuse, exfiltration, inter_agent, indirect_injection, ...)")
     config.addinivalue_line("markers", "nightly: runs metered Layer 3 evaluation")
     config.addinivalue_line("markers", "slow: long-running stateful endpoint test")
     config.addinivalue_line("markers", "live: test requires a reachable target service")
@@ -59,6 +133,12 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     uninstall_httpx_wrapper()
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    error = item.get_closest_marker("driftgate_dataset_error")
+    if error is not None:
+        pytest.fail(error.args[0], pytrace=False)
 
 
 def pytest_runtest_logstart(nodeid: str, location: object) -> None:
@@ -225,11 +305,157 @@ def driftgate_recorder(
 
 @pytest.fixture
 def driftgate_client(
-    driftgate_config: DriftGateConfig, driftgate_recorder: CassetteStore
+    driftgate_config: DriftGateConfig,
+    driftgate_recorder: CassetteStore,
+    driftgate_traces: TraceCollector,
 ) -> Iterator[httpx.Client]:
     """Synchronous httpx client with AST-aware record/replay interception."""
     with build_client(driftgate_config, driftgate_recorder) as client:
+        if driftgate_config.agents.capture_traces:
+            attach_traces(
+                client,
+                driftgate_traces,
+                header=driftgate_config.agents.trace_header,
+                body_key=driftgate_config.agents.trace_body_key,
+            )
         yield client
+
+
+@pytest.fixture
+def driftgate_traces() -> TraceCollector:
+    """Agent traces captured from this test's responses (header or JSON body key)."""
+    return TraceCollector()
+
+
+def _judge_unavailable(judge_config: JudgeConfig, message: str) -> NoReturn:
+    """Fail closed (default) or skip, per ``judge.on_error``; never pass."""
+    if judge_config.on_error == "skip":
+        pytest.skip(message)
+    pytest.fail(message, pytrace=False)
+
+
+def _require_api_key(judge_config: JudgeConfig, label: str) -> str:
+    api_key = os.environ.get(judge_config.api_key_env)
+    if not api_key:
+        _judge_unavailable(judge_config, f"{label} judge requires {judge_config.api_key_env} to be set.")
+    return api_key
+
+
+def _post_json(
+    client: httpx.Client, judge_config: JudgeConfig, label: str, path: str, payload: dict[str, Any]
+) -> Any:
+    try:
+        response = client.post(path, json=payload)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+        _judge_unavailable(judge_config, f"Could not get a verdict from {label} judge: {e}")
+
+
+@pytest.fixture(scope="session")
+def driftgate_evaluator(driftgate_config: DriftGateConfig) -> SemanticComparer:
+    """Judge that decides whether a response is a valid substitute for a golden one.
+
+    ``deterministic`` (default) uses the free offline embedding judge. Any LLM
+    provider that is unreachable, unauthenticated or unknown fails the test
+    instead of passing or silently skipping it.
+    """
+    judge_config = driftgate_config.judge
+    provider = judge_config.provider
+
+    if provider == "deterministic":
+        return EmbeddingSimilarityJudge(threshold=judge_config.similarity_threshold)
+
+    if provider == "ollama":
+        client = httpx.Client(
+            base_url=judge_config.ollama.base_url, timeout=judge_config.ollama.timeout
+        )
+
+        def transport(prompt: str) -> str:
+            data = _post_json(client, judge_config, "Ollama", "/api/generate", {
+                "model": judge_config.ollama.model, "prompt": prompt, "stream": False,
+            })
+            return data.get("response", "")
+
+    elif provider == "anthropic":
+        client = httpx.Client(
+            base_url="https://api.anthropic.com/v1",
+            timeout=judge_config.anthropic.timeout,
+            headers={
+                "x-api-key": _require_api_key(judge_config, "Anthropic"),
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
+
+        def transport(prompt: str) -> str:
+            data = _post_json(client, judge_config, "Anthropic", "/messages", {
+                "model": judge_config.anthropic.model,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}],
+            })
+            return " ".join(block.get("text", "") for block in data.get("content", []))
+
+    elif provider == "openai":
+        client = httpx.Client(
+            base_url="https://api.openai.com/v1",
+            timeout=judge_config.openai.timeout,
+            headers={
+                "Authorization": f"Bearer {_require_api_key(judge_config, 'OpenAI')}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        def transport(prompt: str) -> str:
+            data = _post_json(client, judge_config, "OpenAI", "/chat/completions", {
+                "model": judge_config.openai.model,
+                "messages": [{"role": "user", "content": prompt}],
+            })
+            choices = data.get("choices", [])
+            return choices[0].get("message", {}).get("content", "") if choices else ""
+
+    elif provider == "google":
+        client = httpx.Client(
+            base_url="https://generativelanguage.googleapis.com/v1beta",
+            timeout=judge_config.google.timeout,
+            headers={
+                "x-goog-api-key": _require_api_key(judge_config, "Google"),
+                "Content-Type": "application/json",
+            },
+        )
+
+        def transport(prompt: str) -> str:
+            data = _post_json(
+                client, judge_config, "Google",
+                f"/models/{judge_config.google.model}:generateContent",
+                {"contents": [{"parts": [{"text": prompt}]}]},
+            )
+            candidates = data.get("candidates", [])
+            parts = candidates[0].get("content", {}).get("parts", []) if candidates else []
+            return " ".join(part.get("text", "") for part in parts)
+
+    else:
+        raise pytest.UsageError(f"Unsupported judge provider {provider!r} for driftgate_evaluator.")
+
+    return SemanticSimilarityJudge(transport=transport)
+
+
+@pytest.fixture
+def driftgate_agent_contract(request: pytest.FixtureRequest) -> AgentContract:
+    """Loads and validates an agent contract from a YAML file specified by a marker."""
+    marker = request.node.get_closest_marker("agent_contract")
+    if not marker or not marker.args or not isinstance(marker.args[0], str):
+        raise pytest.UsageError(
+            "@pytest.mark.agent_contract requires one string argument for the file path."
+        )
+    contract_path = Path(marker.args[0])
+    if not contract_path.exists():
+        raise pytest.UsageError(f"Agent contract not found at: {contract_path}")
+
+    try:
+        return AgentContract.from_yaml(contract_path)
+    except Exception as e:
+        raise pytest.UsageError(f"Could not load or parse agent contract {contract_path}: {e}") from e
 
 
 @pytest.fixture(scope="session")

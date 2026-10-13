@@ -33,6 +33,244 @@ app = typer.Typer(
     help="API quality gates for non-deterministic GenAI microservices.",
 )
 
+dataset_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Work with golden datasets.",
+)
+app.add_typer(dataset_app, name="dataset")
+
+
+@dataset_app.command("approve")
+def dataset_approve(
+    cassette_path: Annotated[
+        Path, typer.Argument(exists=True, readable=True, help="Path to the cassette file to process.")
+    ],
+    output_path: Annotated[
+        Path, typer.Option("--out", help="Path to save the golden dataset.")
+    ] = Path("golden_dataset.jsonl"),
+) -> None:
+    """Interactively approve interactions from a cassette to build a golden dataset."""
+    from driftgate.recorder.cassette import Cassette
+
+    typer.echo(f"Loading cassette from: {cassette_path}")
+
+    try:
+        raw = yaml.safe_load(cassette_path.read_text())
+        if raw is None:
+            typer.echo("Cassette is empty.")
+            raise typer.Exit()
+        cassette = Cassette.model_validate(raw)
+    except Exception as e:
+        typer.echo(f"Error loading cassette: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    approved_interactions = []
+    for i, interaction in enumerate(cassette.interactions):
+        typer.echo("\n" + "=" * 80)
+        typer.echo(f"Interaction {i + 1} of {len(cassette.interactions)}")
+        typer.echo("-" * 80)
+        typer.secho("Request:", fg=typer.colors.BLUE)
+        typer.echo(f"  Method: {interaction.request.method}")
+        typer.echo(f"  Path:   {interaction.request.path}")
+        typer.echo("  Body (Prompt):")
+        typer.echo(json.dumps(interaction.request.body, indent=2))
+
+        typer.echo()
+        typer.secho("Response:", fg=typer.colors.GREEN)
+        typer.echo(f"  Status: {interaction.response.status}")
+        typer.echo("  Body (Response):")
+        typer.echo(json.dumps(interaction.response.body, indent=2))
+        typer.echo("=" * 80)
+
+        if interaction.request.body is None or interaction.response.body is None:
+            typer.echo("Skipping: request or response has no body to use as a golden example.")
+            continue
+
+        if typer.confirm("Approve this interaction as a golden example?"):
+            approved_interactions.append(
+                {"prompt": interaction.request.body, "response": interaction.response.body}
+            )
+
+    if not approved_interactions:
+        typer.echo("No interactions were approved. Exiting.")
+        raise typer.Exit()
+
+    from driftgate.datasets import append_unique
+
+    try:
+        added, skipped = append_unique(output_path, approved_interactions)
+    except OSError as e:
+        typer.echo(f"Error writing to {output_path}: {e}", err=True)
+        raise typer.Exit(1) from e
+    typer.echo(f"\nSaved {added} new interaction(s) to {output_path} ({skipped} duplicate(s) skipped).")
+
+    typer.echo("Done.")
+
+
+@dataset_app.command("check")
+def dataset_check(
+    path: Annotated[Path, typer.Argument(help="Golden dataset (JSONL) to validate.")],
+    fix: Annotated[
+        bool, typer.Option("--fix", help="Drop bad and duplicate lines (original kept as .bak).")
+    ] = False,
+) -> None:
+    """Validate a golden dataset and report every problem with its line number."""
+    from driftgate.datasets import GENERATE_HINT, check_dataset, fix_dataset
+
+    if not path.exists():
+        typer.echo(f"Dataset not found: {path}", err=True)
+        typer.echo(GENERATE_HINT.format(path=path), err=True)
+        raise typer.Exit(1)
+
+    report = check_dataset(path)
+    for issue in report.issues:
+        typer.echo(f"  [{issue.severity}] {issue}")
+    typer.echo(
+        f"{path}: {len(report.examples)} valid example(s), {len(report.errors)} error(s), "
+        f"{len(report.issues) - len(report.errors)} warning(s)"
+    )
+    if fix and report.issues:
+        _, backup = fix_dataset(path)
+        typer.echo(f"Rewrote {path} with {len(report.examples)} valid example(s); original saved to {backup}")
+        if not report.examples:
+            typer.echo("Nothing valid was left; generate a new dataset.", err=True)
+            typer.echo(GENERATE_HINT.format(path=path), err=True)
+            raise typer.Exit(1)
+        return
+    if report.errors or not report.examples:
+        if not report.examples:
+            typer.echo("The dataset has no usable examples.", err=True)
+            typer.echo(GENERATE_HINT.format(path=path), err=True)
+        else:
+            typer.echo("Re-run with --fix to drop the bad lines.", err=True)
+        raise typer.Exit(1)
+
+
+@dataset_app.command("generate")
+def dataset_generate(
+    out: Annotated[Path, typer.Option("--out", help="Golden dataset to write.")] = Path(
+        "golden_dataset.jsonl"
+    ),
+    from_cassettes: Annotated[
+        Path | None,
+        typer.Option("--from-cassettes", exists=True, help="Cassette file or directory to convert."),
+    ] = None,
+    spec: Annotated[
+        Path | None,
+        typer.Option("--spec", exists=True, help="OpenAPI spec: build requests from its schemas."),
+    ] = None,
+    prompts_file: Annotated[
+        Path | None,
+        typer.Option("--prompts-file", exists=True, help="One prompt per line to send to the service."),
+    ] = None,
+    request_template: Annotated[
+        str,
+        typer.Option("--request-template", help='JSON body; "{prompt}" is replaced for each prompt.'),
+    ] = '{"prompt": "{prompt}"}',
+    endpoint: Annotated[str | None, typer.Option("--endpoint", help="Path, e.g. /chat.")] = None,
+    method: Annotated[str | None, typer.Option("--method")] = None,
+    base_url: Annotated[str | None, typer.Option("--base-url")] = None,
+    config: Annotated[Path | None, typer.Option("--config")] = None,
+    auth_header: Annotated[str | None, typer.Option("--auth-header")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", min=1)] = None,
+    timeout: Annotated[float, typer.Option("--timeout")] = 60.0,
+) -> None:
+    """Create a golden dataset for the application under test.
+
+    Pick exactly one source: recorded cassettes (--from-cassettes), the OpenAPI
+    spec (--spec), or a list of prompts (--prompts-file). Spec and prompt
+    sources send real requests to the running service and keep its 2xx
+    responses. The result records what the service does TODAY: review it before
+    trusting it as the approved baseline.
+    """
+    import httpx
+
+    from driftgate.capture import parse_auth_header
+    from driftgate.datasets import (
+        append_unique,
+        body_operations,
+        examples_from_cassettes,
+        generate_from_service,
+        render_template,
+        request_bodies_from_spec,
+    )
+
+    sources = [s for s in (from_cassettes, spec, prompts_file) if s is not None]
+    if len(sources) != 1:
+        typer.echo("Choose exactly one of --from-cassettes, --spec or --prompts-file.", err=True)
+        raise typer.Exit(2)
+
+    settings = DriftGateConfig.load(config).service
+    endpoint = endpoint or settings.endpoint
+    chosen_method = (method or settings.method or "").upper() or None
+    method = chosen_method or "POST"
+    base_url = base_url or settings.base_url
+
+    if from_cassettes is not None:
+        examples = examples_from_cassettes(from_cassettes, method=chosen_method, endpoint=endpoint)
+        skipped: list[str] = []
+    else:
+        if spec is not None:
+            loaded = yaml.safe_load(spec.read_text())
+            if not endpoint:
+                operations = body_operations(loaded)
+                if len(operations) != 1:
+                    listing = ", ".join(f"{m} {p}" for m, p in operations) or "none"
+                    typer.echo(
+                        f"Pass --endpoint (and --method). Operations with a JSON body: {listing}",
+                        err=True,
+                    )
+                    raise typer.Exit(2)
+                method, endpoint = operations[0]
+            try:
+                bodies = request_bodies_from_spec(loaded, method, endpoint)
+            except ValueError as error:
+                typer.echo(str(error), err=True)
+                raise typer.Exit(2) from error
+        else:
+            if not endpoint:
+                typer.echo("--prompts-file needs --endpoint (or service.endpoint in the config).", err=True)
+                raise typer.Exit(2)
+            try:
+                template = json.loads(request_template)
+            except json.JSONDecodeError as error:
+                typer.echo(f"--request-template is not valid JSON: {error}", err=True)
+                raise typer.Exit(2) from error
+            prompts = [line.strip() for line in prompts_file.read_text().splitlines() if line.strip()]
+            bodies = [render_template(template, prompt) for prompt in prompts]
+        if limit:
+            bodies = bodies[:limit]
+        if not bodies:
+            typer.echo("No requests to send.", err=True)
+            raise typer.Exit(2)
+        typer.echo(f"Sending {len(bodies)} request(s) to {method} {base_url}{endpoint} ...")
+        try:
+            with httpx.Client(base_url=base_url, timeout=timeout) as client:
+                result = generate_from_service(
+                    bodies,
+                    method=method,
+                    endpoint=endpoint,
+                    client=client,
+                    headers=parse_auth_header(auth_header),
+                )
+        except httpx.HTTPError as error:
+            typer.echo(f"Could not reach {base_url}: {error}", err=True)
+            raise typer.Exit(1) from error
+        examples, skipped = result.examples, result.skipped
+
+    if limit:
+        examples = examples[:limit]
+    for reason in skipped:
+        typer.echo(f"  skipped {reason}", err=True)
+    if not examples:
+        typer.echo("No usable examples were produced; nothing written.", err=True)
+        raise typer.Exit(1)
+    added, duplicates = append_unique(out, examples)
+    typer.echo(f"Wrote {added} example(s) to {out} ({duplicates} duplicate(s) skipped).")
+    typer.echo(f"Review it with `driftgate dataset check {out}`, then use it via @pytest.mark.golden_dataset.")
+
+
 _EXIT_CODES = {GateDecision.PROMOTE: 0, GateDecision.ROLLBACK: 1, GateDecision.HOLD: 2}
 
 HISTORY_KEEP = 100
