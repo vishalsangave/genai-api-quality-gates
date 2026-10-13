@@ -10,3 +10,6 @@ build/
 node_modules/
 .env
 .DS_Store
+
+# Local-only files
+SOCIAL_MEDIA_POSTS.md
